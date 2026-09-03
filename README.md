@@ -3,7 +3,6 @@
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-00599C?logo=cplusplus&logoColor=white)
 ![GCC 15.2](https://img.shields.io/badge/GCC-15.2-A42E2B?logo=gnu&logoColor=white)
 ![Tests](https://img.shields.io/badge/tests-3%2F3%20passing-brightgreen)
-![License](https://img.shields.io/badge/license-MIT-blue)
 
 A price-time priority matching engine written in modern C++20, built for **deterministic
 latency** rather than peak throughput alone. The hot path performs no heap allocation, no
