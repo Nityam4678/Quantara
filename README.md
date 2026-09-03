@@ -277,6 +277,3 @@ Stated plainly, because an engine's constraints matter as much as its numbers:
 
 ---
 
-## License
-
-MIT.
