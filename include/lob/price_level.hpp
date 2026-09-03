@@ -134,7 +134,7 @@ public:
 
     [[nodiscard]] inline Price       price()        const noexcept { return price_; }
     [[nodiscard]] inline Quantity    total_volume() const noexcept { return total_volume_; }
-    [[nodiscard]] inline std::size_t order_count()  const noexcept { return order_count_; }
+    [[nodiscard]] inline std::size_t order_count()  const noexcept { return order_count_; }  // NOLINT
     [[nodiscard]] inline bool        empty()        const noexcept { return head_ == nullptr; }
 
     [[nodiscard]] inline Order*       front()       noexcept { return head_; }
@@ -164,11 +164,17 @@ public:
     [[nodiscard]] bool verify() const noexcept;
 
 private:
-    Order*      head_         = nullptr;  // oldest -- next to fill
-    Order*      tail_         = nullptr;  // newest
-    Price       price_        = 0;
-    Quantity    total_volume_ = 0;
-    std::size_t order_count_  = 0;
+    // Exactly 32 bytes: two levels per cache line. That matters now that the
+    // book stores levels in a flat array and scans them linearly to find the
+    // next non-empty price -- halving the stride halves the scan's cache cost.
+    Order*        head_         = nullptr;  // oldest -- next to fill
+    Order*        tail_         = nullptr;  // newest
+    Price         price_        = 0;
+    Quantity      total_volume_ = 0;
+    std::uint32_t order_count_  = 0;        // exposed as size_t; 4B here
 };
+
+static_assert(sizeof(PriceLevel) == 32, "PriceLevel must be half a cache line");
+static_assert(alignof(PriceLevel) == 8, "PriceLevel alignment");
 
 } // namespace lob

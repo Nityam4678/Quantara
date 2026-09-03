@@ -280,8 +280,19 @@ int main() {
                 // later is a no-op the book must tolerate, which is the point.
             }
             ++msgs;
-            if (!b.verify()) { std::printf("FAIL: fuzz invariant at msg %d\n", i); ++failures; break; }
+            // verify() now sweeps both 100k-entry arrays end to end, so it
+            // costs ~6 MB of traffic per call. Run it on every message while
+            // the book is still small and bugs surface fastest, then thin out
+            // to keep the suite quick without giving up coverage.
+            if (i < 2000 || (i % 64) == 0) {
+                if (!b.verify()) {
+                    std::printf("FAIL: fuzz invariant at msg %d\n", i);
+                    ++failures;
+                    break;
+                }
+            }
         }
+        check(b.verify(), "fuzz final invariant");
 
         check(b.pool().in_use() == b.live_order_count(), "fuzz pool accounting");
         std::printf("fuzz: %d messages, %llu units traded, %zu levels live\n",
@@ -338,6 +349,121 @@ int main() {
                     b.bid_level_count() + b.ask_level_count());
         check(b.verify(), "verify after throughput run");
         check(b.live_order_count() > 1000, "book actually had depth");
+    }
+
+    // -----------------------------------------------------------------------
+    // 12. Flat-array specifics: tick bounds, sentinels, best-price repair
+    // -----------------------------------------------------------------------
+    {
+        OrderBook b(4096);
+
+        // Sentinels on an empty book.
+        check(b.best_bid_tick() == 0, "empty bid sentinel");
+        check(b.best_ask_tick() == MAX_PRICE_TICKS, "empty ask sentinel");
+        check(b.spread() == 0 && !b.has_both_sides(), "no spread when empty");
+
+        // Off the tick grid is a reject, not an out-of-bounds write.
+        b.add_order(1, Side::BUY, MAX_PRICE_TICKS, 10);
+        check(b.last_report().status == OrderStatus::RejectedPriceOutOfRange, "price == MAX");
+        b.add_order(2, Side::BUY, MAX_PRICE_TICKS + 5000, 10);
+        check(b.last_report().status == OrderStatus::RejectedPriceOutOfRange, "price > MAX");
+        check(b.live_order_count() == 0, "rejects left nothing behind");
+
+        // The highest legal tick must work.
+        b.add_order(3, Side::SELL, MAX_PRICE_TICKS - 1, 10);
+        check(b.last_report().ok() && b.best_ask_tick() == MAX_PRICE_TICKS - 1, "top tick");
+        b.cancel_order(3);
+        check(b.best_ask_tick() == MAX_PRICE_TICKS, "sentinel restored after drain");
+        check(b.ask_level_count() == 0, "no ask levels");
+        step(b, "verify after bounds");
+    }
+    {
+        // Best price must skip over empty ticks, not stop at the first gap.
+        OrderBook b(4096);
+        b.add_order(1, Side::BUY, 5000, 10);
+        b.add_order(2, Side::BUY, 5001, 10);
+        b.add_order(3, Side::BUY, 5900, 10);   // 899 empty ticks below it
+        check(b.best_bid_tick() == 5900, "best bid at top");
+
+        b.cancel_order(3);
+        check(b.best_bid_tick() == 5001, "scanned down across the gap");
+        check(b.bid_level_count() == 2, "two levels left");
+        step(b, "verify after gap scan");
+
+        b.cancel_order(2);
+        check(b.best_bid_tick() == 5000, "adjacent step down");
+        b.cancel_order(1);
+        check(b.best_bid_tick() == 0, "sentinel after last bid");
+        check(b.bid_level_count() == 0, "no bid levels");
+        step(b, "verify after full bid drain");
+
+        // Same on the ask side, and across a much wider gap.
+        b.add_order(10, Side::SELL, 200, 10);
+        b.add_order(11, Side::SELL, 90'000, 10);
+        check(b.best_ask_tick() == 200, "best ask at bottom");
+        b.cancel_order(10);
+        check(b.best_ask_tick() == 90'000, "scanned up across a wide gap");
+        step(b, "verify after wide ask gap");
+        b.cancel_order(11);
+        check(b.best_ask_tick() == MAX_PRICE_TICKS, "ask sentinel restored");
+    }
+    {
+        // Matching across a gap must leave best_ask correct, including the
+        // case where the sweep empties the side entirely.
+        OrderBook b(4096);
+        b.add_order(1, Side::SELL, 100, 10);
+        b.add_order(2, Side::SELL, 700, 10);   // 599 empty ticks between
+        b.add_order(3, Side::SELL, 701, 10);
+
+        b.add_order(9, Side::BUY, 700, 15);    // takes 100 fully, 5 from 700
+        check(b.last_trades().size() == 2, "two fills across the gap");
+        check(b.last_trades()[0].price == 100 && b.last_trades()[1].price == 700, "gap skipped");
+        check(b.best_ask_tick() == 700, "best ask advanced across the gap");
+        check(b.volume_at(Side::SELL, 700) == 5, "partial level remains");
+        check(b.ask_level_count() == 2, "700 and 701 left");
+        step(b, "verify after gap sweep");
+
+        b.add_order(10, Side::BUY, 99'999, 100);  // sweeps everything left
+        check(b.last_report().filled == 15, "swept the rest");
+        check(b.last_report().resting == 85, "residual rests");
+        check(b.ask_level_count() == 0, "asks drained");
+        check(b.best_ask_tick() == MAX_PRICE_TICKS, "sentinel after sweep drain");
+        check(b.best_bid_tick() == 99'999, "residual is the new bid");
+        step(b, "verify after drain sweep");
+    }
+    {
+        // A stale best price is the bug class this refactor introduces, so
+        // hammer the touch level specifically: repeatedly empty it and refill.
+        OrderBook b(65'536);
+        std::mt19937_64 rng(0xBEEF);
+        OrderId next_id = 1;
+        std::vector<OrderId> live;
+
+        for (int round = 0; round < 300; ++round) {
+            const Price base = 40'000 + static_cast<Price>(rng() % 200);
+            for (int k = 0; k < 8; ++k) {
+                const Side  side = (k % 2) ? Side::BUY : Side::SELL;
+                const Price px   = (side == Side::BUY) ? base - 1 - (rng() % 5)
+                                                       : base + 1 + (rng() % 5);
+                b.add_order(next_id, side, px, 1 + static_cast<Quantity>(rng() % 20));
+                if (b.last_report().resting > 0) live.push_back(next_id);
+                ++next_id;
+            }
+            // Cancel roughly half, preferring whatever is at the touch.
+            for (int k = 0; k < 4 && !live.empty(); ++k) {
+                const std::size_t idx = rng() % live.size();
+                b.cancel_order(live[idx]);
+                live[idx] = live.back();
+                live.pop_back();
+            }
+            if (!b.verify()) { std::printf("FAIL: touch churn round %d\n", round); ++failures; break; }
+        }
+        check(b.verify(), "touch churn final");
+        b.clear();
+        check(b.pool().in_use() == 0 && b.best_bid_tick() == 0 &&
+              b.best_ask_tick() == MAX_PRICE_TICKS, "clear resets sentinels");
+        check(b.bid_level_count() == 0 && b.ask_level_count() == 0, "clear resets counters");
+        step(b, "verify after clear");
     }
 
     if (failures == 0) { std::puts("ALL TESTS PASSED"); return 0; }

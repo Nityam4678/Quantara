@@ -14,33 +14,87 @@ constexpr std::size_t kTradeBufferReserve = 4096;
 OrderBook::OrderBook(std::size_t capacity)
     : pool_(capacity),
       tracker_(capacity),
-      bids_(),
-      asks_(),
+      bids_(std::make_unique<LevelArray>()),
+      asks_(std::make_unique<LevelArray>()),
       trades_(),
       report_() {
+    // Each level's price is its own index. Stamping it once here keeps
+    // PriceLevel self-describing, so Order::level->price() still answers
+    // without the book having to work out which array the level came from.
+    for (Price tick = 0; tick < MAX_PRICE_TICKS; ++tick) {
+        (*bids_)[tick].set_price(tick);
+        (*asks_)[tick].set_price(tick);
+    }
     pool_.prefault();
     trades_.reserve(kTradeBufferReserve);
 }
 
 // ---------------------------------------------------------------------------
+// Best-price repair
+//
+// Called only when the touch level empties. The level-count check first is
+// what keeps this cheap: a side that has just been fully drained jumps
+// straight to its sentinel instead of scanning every remaining tick to the
+// end of the array. With levels still present, the scan is bounded by the gap
+// to the next populated price, which in a real book is a handful of ticks.
+// ---------------------------------------------------------------------------
+void OrderBook::repair_best_bid() noexcept {
+    if (bid_levels_ == 0) {
+        best_bid_ = 0;
+        return;
+    }
+    const LevelArray& bids = *bids_;
+    while (best_bid_ > 0 && bids[best_bid_].empty()) {
+        --best_bid_;
+    }
+}
+
+void OrderBook::repair_best_ask() noexcept {
+    if (ask_levels_ == 0) {
+        best_ask_ = MAX_PRICE_TICKS;
+        return;
+    }
+    const LevelArray& asks = *asks_;
+    while (best_ask_ < MAX_PRICE_TICKS && asks[best_ask_].empty()) {
+        ++best_ask_;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Matching
 //
-// Walks the opposing book from the top down while the aggressor limit still
-// crosses, and inside each level walks the intrusive queue front to back --
-// price priority across levels, time priority within one.
+// Walks the opposing side from the touch outwards while the aggressor's limit
+// still crosses, and inside each level walks the intrusive queue front to
+// back -- price priority across levels, time priority within one.
 //
-// Every fill is at the MAKER price, so a sweep of three levels produces three
-// trades at three prices, which is what an exchange would print.
+// Every fill is at the MAKER's price, so a sweep of three levels produces
+// three trades at three prices, which is what an exchange would print.
+//
+// The empty-side sentinels make the loop condition self-guarding: with no
+// asks, best_ask_ == MAX_PRICE_TICKS fails `<= limit` for every legal limit;
+// with no bids, best_bid_ == 0 fails `>= limit` for every legal limit.
 // ---------------------------------------------------------------------------
-template <typename LevelMap, typename Crosses>
-Quantity OrderBook::match(LevelMap& book, OrderId taker_id, Side taker_side,
-                          Quantity qty, Crosses crosses) noexcept {
-    Quantity remaining = qty;
-    auto     it        = book.begin();
+template <Side TakerSide>
+Quantity OrderBook::match(OrderId taker_id, Quantity qty, Price limit) noexcept {
+    constexpr bool kBuy = (TakerSide == Side::BUY);
 
-    while (remaining > 0 && it != book.end() && crosses(it->first)) {
-        PriceLevel& level       = it->second;
-        const Price trade_price = it->first;
+    LevelArray& book = kBuy ? *asks_ : *bids_;
+    Quantity    remaining = qty;
+
+    for (;;) {
+        if (remaining == 0) break;
+
+        // Cross test against the cached touch price -- no lookup, no compare
+        // chain, just the two integers we already hold.
+        if constexpr (kBuy) {
+            if (best_ask_ > limit) break;
+        } else {
+            if (best_bid_ < limit) break;
+        }
+
+        const Price trade_price = kBuy ? best_ask_ : best_bid_;
+        PriceLevel& level       = book[trade_price];
+        assert(!level.empty() && "best price points at an empty level");
 
         // Drain this level, oldest maker first.
         while (remaining > 0) {
@@ -54,7 +108,7 @@ Quantity OrderBook::match(LevelMap& book, OrderId taker_id, Side taker_side,
                                     .taker_order_id = taker_id,
                                     .price          = trade_price,
                                     .quantity       = fill,
-                                    .aggressor_side = taker_side});
+                                    .aggressor_side = TakerSide});
             remaining -= fill;
 
             if (fill == maker->quantity) {
@@ -69,20 +123,41 @@ Quantity OrderBook::match(LevelMap& book, OrderId taker_id, Side taker_side,
             } else {
                 // Maker partially filled: it stays at the FRONT of the queue,
                 // keeping its time priority, with its quantity reduced. This
-                // also decrements the level total_volume in the same step, so
-                // the aggregate can never drift.
+                // also decrements the level's total_volume in the same step,
+                // so the aggregate can never drift.
                 level.reduce_order(maker, fill);
                 assert(remaining == 0);
             }
         }
 
-        if (level.empty()) {
-            // Erase the level as soon as it empties. Without this the tree
-            // keeps a node for every price ever traded and grows all session.
-            // erase() returns the next iterator, so the walk continues safely.
-            it = book.erase(it);
+        if (!level.empty()) {
+            break;  // only reachable once remaining == 0
+        }
+
+        // Level drained. Nothing to erase -- the slot stays resident, it is
+        // simply empty now. Step past it to the next populated price.
+        if constexpr (kBuy) {
+            --ask_levels_;
+            if (ask_levels_ == 0) {
+                best_ask_ = MAX_PRICE_TICKS;
+            } else {
+                // ask_levels_ > 0 guarantees a populated tick above, so the
+                // scan cannot run off the end -- asserted, not branch-checked.
+                do {
+                    ++best_ask_;
+                    assert(best_ask_ < MAX_PRICE_TICKS && "ask_levels_ disagrees with the array");
+                } while (book[best_ask_].empty());
+            }
         } else {
-            ++it;  // only reachable once remaining == 0; loop exits next test
+            --bid_levels_;
+            if (bid_levels_ == 0) {
+                best_bid_ = 0;
+            } else {
+                do {
+                    --best_bid_;
+                    assert(best_bid_ > 0 && "bid_levels_ disagrees with the array");
+                } while (book[best_bid_].empty());
+            }
         }
     }
 
@@ -92,9 +167,10 @@ Quantity OrderBook::match(LevelMap& book, OrderId taker_id, Side taker_side,
 // ---------------------------------------------------------------------------
 // Resting the residual
 // ---------------------------------------------------------------------------
-template <typename LevelMap>
-bool OrderBook::rest(LevelMap& book, OrderId order_id, Side side,
-                     Price price, Quantity qty) noexcept {
+template <Side OrderSide>
+bool OrderBook::rest(OrderId order_id, Price price, Quantity qty) noexcept {
+    constexpr bool kBuy = (OrderSide == Side::BUY);
+
     Order* const order = pool_.allocate();
     if (order == nullptr) [[unlikely]] {
         return false;  // pool exhausted -- caller reports the residual dropped
@@ -107,15 +183,23 @@ bool OrderBook::rest(LevelMap& book, OrderId order_id, Side side,
                    .next      = nullptr,
                    .level     = nullptr,
                    .quantity  = qty,
-                   .side      = side};
+                   .side      = OrderSide};
 
-    // try_emplace constructs the level in place -- PriceLevel is pinned
-    // (non-movable), which std::map is fine with because it never relocates a
-    // node once built.
-    const auto [it, inserted] = book.try_emplace(price, price);
-    (void)inserted;
+    // The whole point of the refactor: the level lookup is an array index.
+    PriceLevel& level = kBuy ? (*bids_)[price] : (*asks_)[price];
 
-    it->second.append_order(order);
+    if (level.empty()) {
+        if constexpr (kBuy) { ++bid_levels_; } else { ++ask_levels_; }
+    }
+    level.append_order(order);
+
+    // A resting order can only ever improve the touch: anything that would
+    // have crossed was already matched away above.
+    if constexpr (kBuy) {
+        if (price > best_bid_) best_bid_ = price;
+    } else {
+        if (price < best_ask_) best_ask_ = price;
+    }
 
     const bool tracked = tracker_.track(order_id, order);
     assert(tracked && "duplicate id survived the pre-match check");
@@ -137,7 +221,15 @@ void OrderBook::add_order(OrderId order_id, Side side, Price price, Quantity qty
         return;
     }
     if (price == 0) [[unlikely]] {
+        // Tick 0 is the "no bid" sentinel and can never hold an order.
         report_.status = OrderStatus::RejectedZeroPrice;
+        return;
+    }
+    if (price >= MAX_PRICE_TICKS) [[unlikely]] {
+        // The tick grid is fixed. Off the grid is a reject, not an array
+        // overrun -- this check is the only thing standing between a bad
+        // feed and a 6 MB out-of-bounds write.
+        report_.status = OrderStatus::RejectedPriceOutOfRange;
         return;
     }
     // Checked BEFORE matching: a duplicate id is a gateway bug, and it must
@@ -147,22 +239,15 @@ void OrderBook::add_order(OrderId order_id, Side side, Price price, Quantity qty
         return;
     }
 
-    // A BUY crosses an ask priced at or below its limit; a SELL crosses a bid
-    // priced at or above its limit. The maps are already ordered best-first,
-    // so the first level that fails this test ends the sweep.
-    const Quantity remaining =
-        (side == Side::BUY)
-            ? match(asks_, order_id, Side::BUY, qty,
-                    [price](Price ask) noexcept { return ask <= price; })
-            : match(bids_, order_id, Side::SELL, qty,
-                    [price](Price bid) noexcept { return bid >= price; });
+    const Quantity remaining = (side == Side::BUY)
+                                   ? match<Side::BUY>(order_id, qty, price)
+                                   : match<Side::SELL>(order_id, qty, price);
 
     report_.filled = qty - remaining;
 
     if (remaining > 0) {
-        const bool rested = (side == Side::BUY)
-                                ? rest(bids_, order_id, side, price, remaining)
-                                : rest(asks_, order_id, side, price, remaining);
+        const bool rested = (side == Side::BUY) ? rest<Side::BUY>(order_id, price, remaining)
+                                                : rest<Side::SELL>(order_id, price, remaining);
         if (rested) [[likely]] {
             report_.resting = remaining;
         } else {
@@ -203,76 +288,97 @@ void OrderBook::cancel_order(OrderId order_id) noexcept {
     level->remove_order(order);
     pool_.deallocate(order);
 
-    // Only if that was the last order here do we pay a tree erase. Note that
-    // the pointer `level` is dead after this block.
-    if (level->empty()) {
-        if (side == Side::BUY) {
-            bids_.erase(price);
-        } else {
-            asks_.erase(price);
-        }
+    if (!level->empty()) {
+        return;  // depth still here, touch price unchanged
+    }
+
+    // Level is now empty. The slot stays where it is; only the counters and,
+    // if this was the touch, the cached best price need fixing.
+    if (side == Side::BUY) {
+        --bid_levels_;
+        if (price == best_bid_) repair_best_bid();
+    } else {
+        --ask_levels_;
+        if (price == best_ask_) repair_best_ask();
     }
 }
 
 // ---------------------------------------------------------------------------
 // Introspection
 // ---------------------------------------------------------------------------
-Quantity OrderBook::volume_at(Side side, Price price) const noexcept {
-    if (side == Side::BUY) {
-        const auto it = bids_.find(price);
-        return it == bids_.end() ? Quantity{0} : it->second.total_volume();
-    }
-    const auto it = asks_.find(price);
-    return it == asks_.end() ? Quantity{0} : it->second.total_volume();
-}
-
 void OrderBook::clear() noexcept {
-    for (auto& entry : bids_) {
-        while (Order* o = entry.second.pop_front()) {
-            pool_.deallocate(o);
-        }
+    for (Price tick = 0; tick < MAX_PRICE_TICKS; ++tick) {
+        PriceLevel& bid = (*bids_)[tick];
+        while (Order* o = bid.pop_front()) pool_.deallocate(o);
+        PriceLevel& ask = (*asks_)[tick];
+        while (Order* o = ask.pop_front()) pool_.deallocate(o);
     }
-    for (auto& entry : asks_) {
-        while (Order* o = entry.second.pop_front()) {
-            pool_.deallocate(o);
-        }
-    }
-    bids_.clear();
-    asks_.clear();
+    best_bid_   = 0;
+    best_ask_   = MAX_PRICE_TICKS;
+    bid_levels_ = 0;
+    ask_levels_ = 0;
     tracker_.clear();
     trades_.clear();
     report_ = ExecutionReport{};
 }
 
 bool OrderBook::verify() const noexcept {
-    std::size_t counted = 0;
+    std::size_t counted     = 0;
+    std::size_t bid_levels  = 0;
+    std::size_t ask_levels  = 0;
+    Price       highest_bid = 0;
+    Price       lowest_ask  = MAX_PRICE_TICKS;
 
-    const auto check_side = [&](const auto& book, Side side) noexcept {
-        for (const auto& entry : book) {
-            const PriceLevel& level = entry.second;
-            if (entry.first != level.price()) return false;  // key vs payload
-            if (level.empty())                return false;  // empty level not erased
-            if (!level.verify())              return false;  // links / aggregates
+    const auto check_level = [&](const PriceLevel& level, Price tick, Side side) noexcept {
+        if (level.price() != tick)     return false;  // index vs payload
+        if (level.empty())             return true;   // empty slots are normal now
+        if (!level.verify())           return false;  // links / aggregates
 
-            for (const Order* o = level.front(); o != nullptr; o = o->next) {
-                if (o->side != side)                 return false;
-                if (o->price != level.price())       return false;
-                if (tracker_.find(o->order_id) != o) return false;  // index disagrees
-                ++counted;
-            }
+        for (const Order* o = level.front(); o != nullptr; o = o->next) {
+            if (o->side != side)                 return false;
+            if (o->price != tick)                return false;
+            if (tracker_.find(o->order_id) != o) return false;  // index disagrees
+            ++counted;
         }
         return true;
     };
 
-    if (!check_side(bids_, Side::BUY))  return false;
-    if (!check_side(asks_, Side::SELL)) return false;
+    // Full sweep of both arrays. Deliberately unbounded: a scan limited to the
+    // known range could not detect resting depth sitting outside best_bid_ /
+    // best_ask_, which is exactly the bug class this refactor introduces.
+    for (Price tick = 0; tick < MAX_PRICE_TICKS; ++tick) {
+        const PriceLevel& bid = (*bids_)[tick];
+        const PriceLevel& ask = (*asks_)[tick];
+
+        if (!check_level(bid, tick, Side::BUY))  return false;
+        if (!check_level(ask, tick, Side::SELL)) return false;
+
+        if (!bid.empty()) {
+            ++bid_levels;
+            highest_bid = tick;                       // ascending sweep: last wins
+            if (tick == 0) return false;              // tick 0 is the sentinel
+        }
+        if (!ask.empty()) {
+            ++ask_levels;
+            if (lowest_ask == MAX_PRICE_TICKS) lowest_ask = tick;
+            if (tick == 0) return false;
+        }
+    }
+
+    // Cached top of book must equal what the sweep actually found.
+    if (best_bid_ != highest_bid) return false;
+    if (best_ask_ != lowest_ask)  return false;
+
+    // Level counters must match reality, or repair_best_*() will short-circuit
+    // to a sentinel while depth is still resting.
+    if (bid_levels_ != bid_levels) return false;
+    if (ask_levels_ != ask_levels) return false;
 
     // The index must hold exactly the resting orders -- no leaks, no ghosts.
     if (counted != tracker_.size()) return false;
 
-    // A book must never be crossed once a call returns: any crossing would
-    // have been matched away.
-    if (has_both_sides() && bids_.begin()->first >= asks_.begin()->first) {
+    // A book must never be crossed once a call returns.
+    if (best_bid_ != 0 && best_ask_ != MAX_PRICE_TICKS && best_bid_ >= best_ask_) {
         return false;
     }
 
