@@ -1,0 +1,10 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.12.5
+psycopg[binary]==3.2.13
+pytest==8.3.4
+langchain-core==0.3.79
+langchain-openai==0.2.14
+langchain-text-splitters==0.3.11
+tree-sitter==0.25.2
+tree-sitter-cpp==0.23.4

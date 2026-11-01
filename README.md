@@ -193,6 +193,239 @@ LimitOrderBook/
 
 ---
 
+## TradeMind Phase 1 integration
+
+Phase 1 adds a persistent native JSON-lines adapter at
+`services/engine-adapter/main.cpp` and an Express gateway at
+`services/api-gateway/`. The adapter links to the existing `lob` static
+library; the matching algorithm and C++ hot path are unchanged.
+
+See [services/api-gateway/README.md](services/api-gateway/README.md) for the
+request/response protocol, REST endpoints, Windows startup commands, and
+integration tests.
+
+## TradeMind Phase 2 terminal
+
+Phase 2 adds a React/Vite/Tailwind trading terminal in `frontend/`. It reads
+the live Express/native-engine state, submits and cancels real limit orders,
+shows depth and executions, and receives engine changes over Server-Sent
+Events.
+
+```powershell
+Set-Location .\frontend
+npm install
+npm run dev
+```
+
+The Vite development server proxies `/api` to the Express gateway at
+`http://127.0.0.1:3000`. Build the production bundle with
+`npm run build`.
+
+## TradeMind Phase 3 codebase assistant
+
+Phase 3 adds a code-aware RAG service in `services/ai-service/`. It indexes
+C++ headers and sources, CMake files, tests, and Markdown documentation using
+Tree-sitter C++ AST chunks and LangChain Markdown chunks with file paths,
+symbols, classes, namespaces, and line ranges. The service preserves complete
+function implementations whenever practical and syntax-splits oversized
+functions. Markdown uses `MarkdownHeaderTextSplitter` followed by
+`RecursiveCharacterTextSplitter` only for oversized sections. All normalized
+chunks are LangChain `Document` objects before persistence. The service
+supports incremental SHA-256 ingestion, semantic retrieval through a
+LangChain retriever adapter, grounded answers with citations, abstention when
+evidence is unavailable, and SSE chat streaming. The frontend exposes the
+assistant in the terminal, while Express proxies the AI routes:
+
+| Method | Express route | Purpose |
+|---|---|---|
+| GET | `/api/ai/health` | AI service health and indexed chunk count |
+| POST | `/api/ai/ingest` | Scan and incrementally index the repository |
+| GET | `/api/ai/search?q=...` | Retrieve source snippets |
+| POST | `/api/ai/chat` | Return a grounded answer and citations |
+| POST | `/api/ai/chat/stream` | Stream the answer as SSE events |
+| GET | `/api/ai/retrieval?q=...&strategy=hybrid` | Compare vector, keyword, hybrid, or reranked retrieval |
+| POST | `/api/ai/evaluate` | Run the 30-question retrieval evaluation and persist results |
+
+### Windows local setup
+
+The service runs as a native process; Docker is not required.
+
+```powershell
+Set-Location .\services\ai-service
+py -3.14 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+$env:REPOSITORY_ROOT = (Resolve-Path ..\..).Path
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+For local development, leave `DATABASE_URL` unset. The service then uses the
+deterministic in-memory vector store and hash embeddings, which require no
+external services. For persistent retrieval, configure PostgreSQL with the
+pgvector extension and set:
+
+```powershell
+$env:DATABASE_URL = "postgresql://user:password@127.0.0.1:5432/trademind"
+$env:EMBEDDING_API_URL = "https://your-provider.example/v1/embeddings"
+$env:EMBEDDING_API_KEY = "..."
+$env:EMBEDDING_MODEL = "text-embedding-3-small"
+$env:EMBEDDING_DIMENSIONS = "1536"
+$env:LLM_API_URL = "https://your-provider.example/v1/chat/completions"
+$env:LLM_API_KEY = "..."
+$env:LLM_MODEL = "..."
+$env:CPP_CHUNK_SIZE = "12000"
+$env:MARKDOWN_CHUNK_SIZE = "6000"
+$env:MARKDOWN_CHUNK_OVERLAP = "200"
+$env:RETRIEVAL_VECTOR_WEIGHT = "0.65"
+$env:RETRIEVAL_KEYWORD_WEIGHT = "0.35"
+$env:RETRIEVAL_CANDIDATE_K = "20"
+$env:RERANK_ENABLED = "true"
+$env:RERANK_API_URL = ""
+$env:RERANK_API_KEY = ""
+$env:RERANK_MODEL = ""
+$env:EVALUATION_K = "5"
+```
+
+Embedding and LLM endpoints use OpenAI-compatible JSON contracts. The local
+fallback is intended for development and tests; hosted embeddings and an LLM
+are required for provider-backed production answers. When an embedding API key
+is configured, `langchain-openai` provides the embedding integration; a
+custom OpenAI-compatible URL without a key continues to use the service's
+HTTP adapter. Adjust the chunk-size variables and evaluate ingestion/retrieval
+quality for the repository before selecting production defaults. Start Express with
+`AI_SERVICE_URL=http://127.0.0.1:8000` after the FastAPI service is running.
+
+### Phase 4 retrieval and evaluation
+
+The retrieval layer supports four measured strategies:
+
+- `vector`: pgvector cosine similarity or the local vector store.
+- `keyword`: PostgreSQL `tsvector`/GIN full-text search, with a matching
+  in-memory implementation for tests.
+- `hybrid`: weighted Reciprocal Rank Fusion of vector and keyword rankings.
+- `hybrid+rereank`: hybrid candidates reordered by the configured reranker.
+
+The default reranker is a deterministic lexical reranker for offline
+development. Configure `RERANK_API_URL`, `RERANK_MODEL`, and optionally
+`RERANK_API_KEY` for an external reranking provider. Exact symbols remain in
+the keyword query and are not discarded during query expansion.
+
+Run the actual evaluation dataset after ingestion:
+
+```powershell
+Invoke-RestMethod -Method Post http://127.0.0.1:8000/evaluate?k=5 |
+  ConvertTo-Json -Depth 6
+```
+
+The dataset contains 30 repository-specific questions. Results compare
+Recall@K, Precision@K, MRR, nDCG, citation correctness, answer
+faithfulness, retrieval/generation latency, token count, and estimated cost.
+Offline runs report measured zero provider tokens and zero provider cost;
+they do not fabricate hosted-provider usage. PostgreSQL deployments persist
+reports in `rag_evaluations`. The frontend RAG evaluation panel displays the
+latest measured report and does not synthesize metrics.
+
+Run the Phase 3 checks:
+
+```powershell
+Set-Location .\services\ai-service
+.\.venv\Scripts\python.exe -m pytest -q
+
+Set-Location ..\api-gateway
+$env:ENGINE_ADAPTER_PATH = (Resolve-Path ..\..\build\trademind_engine_adapter.exe).Path
+$env:AI_SERVICE_URL = "http://127.0.0.1:8000"
+npm test
+```
+
+The PostgreSQL store creates `rag_documents` and `rag_chunks` and enables the
+`vector` extension. Hosted provider credentials and PostgreSQL are intentionally
+not required for the deterministic unit-test path.
+
+### Phase 5 investigation agent
+
+The controlled investigation agent is exposed through:
+
+| Method | Route | Purpose |
+|---|---|---|
+| POST | `/api/ai/agent` | Run a bounded investigation and return tool results |
+| POST | `/api/ai/agent/stream` | Stream summary, tool calls, result, and completion events |
+
+The allowlisted tools are `get_order_book`, `get_order_details`,
+`get_execution_history`, `get_recent_events`, `run_order_simulation`,
+`search_codebase`, and `search_documentation`.
+
+Read tools query the live Express/native-engine API and indexed RAG store.
+Simulation accepts only 1–10 validated limit orders, never accepts shell
+commands, and requires `approved: true`. Tool calls have argument validation,
+timeouts, bounded retries, an iteration limit, and audit records. PostgreSQL
+deployments persist audit records in `agent_tool_audit`; local mode retains
+the most recent 1,000 records in memory.
+
+```powershell
+$body = @{
+  question = "Why is order 88001 resting in the actual order book?"
+  approved = $false
+} | ConvertTo-Json
+Invoke-RestMethod -Method Post http://127.0.0.1:3000/api/ai/agent `
+  -ContentType "application/json" -Body $body
+```
+
+For a state-changing simulation, provide explicit approval and a bounded
+scenario:
+
+```powershell
+$body = @{
+  question = "Simulate two crossing orders and explain the result"
+  approved = $true
+  scenario = @(
+    @{ orderId = 99001; side = "BUY"; price = 90; quantity = 2 },
+    @{ orderId = 99002; side = "SELL"; price = 90; quantity = 2 }
+  )
+} | ConvertTo-Json -Depth 5
+Invoke-RestMethod -Method Post http://127.0.0.1:3000/api/ai/agent `
+  -ContentType "application/json" -Body $body
+```
+
+The frontend investigation panel displays the public reasoning summary, tool
+statuses and outputs, retrieved citations, execution results, and approval
+state. Private chain-of-thought is not exposed.
+
+### Phase 6 benchmark intelligence
+
+Phase 6 runs the existing `lob_bench` executable unchanged. The runner passes
+only the benchmark's supported `--events`, `--seed`, and `--sigma` options,
+captures stdout and stderr, rejects incomplete human-readable output, enforces
+a timeout, and limits concurrent runs. Each workload record stores the
+measured bulk throughput and average latency, per-event percentiles, working
+set, compiler/assert configuration, machine metadata, inputs, timestamp, and
+raw process output. PostgreSQL stores records in `benchmark_runs`; local
+development uses an in-memory history.
+
+Configure the executable and start the AI service:
+
+```powershell
+$env:BENCHMARK_EXECUTABLE = (Resolve-Path .\.phase6-build\lob_bench.exe).Path
+$env:BENCHMARK_TIMEOUT_SECONDS = "120"
+$env:BENCHMARK_MAX_CONCURRENT = "1"
+Set-Location .\services\ai-service
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+Run and inspect a measured experiment through the gateway:
+
+```powershell
+$body = @{ events = 10000; seed = 42; sigma = 12 } | ConvertTo-Json
+Invoke-RestMethod -Method Post http://127.0.0.1:3000/api/ai/benchmarks/run `
+  -ContentType "application/json" -Body $body | ConvertTo-Json -Depth 8
+Invoke-RestMethod http://127.0.0.1:3000/api/ai/benchmarks?limit=20 |
+  ConvertTo-Json -Depth 8
+```
+
+The React benchmark panel displays latest workload cards and historical
+experiments. Its analyst endpoint combines selected stored measurements with
+RAG citations and labels profiling explanations as hypotheses. It never
+creates numerical results: numerical claims come from persisted benchmark
+records, while proving a bottleneck requires a separate profiling experiment.
+
 ## How to Build & Run
 
 Requires a C++20 compiler (GCC 13+, Clang 16+, or MSVC 19.3+) and CMake 3.20+.

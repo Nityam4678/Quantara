@@ -43,6 +43,12 @@ add_executable(lob_bench src/main.cpp)
 target_link_libraries(lob_bench PRIVATE lob)
 
 # ---------------------------------------------------------------------------
+# Native JSON-lines adapter
+# ---------------------------------------------------------------------------
+add_executable(trademind_engine_adapter services/engine-adapter/main.cpp)
+target_link_libraries(trademind_engine_adapter PRIVATE lob)
+
+# ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
 enable_testing()

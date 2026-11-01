@@ -1,0 +1,14 @@
+{
+  "name": "trademind-api-gateway",
+  "private": true,
+  "version": "0.1.0",
+  "description": "TradeMind Phase 1 Express gateway",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test test/**/*.test.js"
+  },
+  "dependencies": {
+    "express": "^5.1.0"
+  }
+}
