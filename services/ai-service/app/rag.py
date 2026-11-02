@@ -59,10 +59,12 @@ class CodebaseRAG:
 
     def files(self) -> list[Path]:
         allowed = CODE_EXTENSIONS | DOC_EXTENSIONS
-        excluded = {".git", "build", "node_modules", "dist", "__pycache__", ".venv"}
+        excluded = {".git", "build", "node_modules", "dist", "__pycache__", ".venv",
+                    "CMakeFiles", "out"}
         return sorted(path for path in self.settings.repository_root.rglob("*")
                       if path.is_file() and path.suffix.lower() in allowed and
-                      not any(part in excluded for part in path.parts))
+                      not any(part in excluded or part.endswith("-build")
+                              for part in path.parts))
 
     def ingest(self) -> IngestResponse:
         scanned = changed = unchanged = chunks_count = embedded = 0

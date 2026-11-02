@@ -7,7 +7,7 @@ const { TradeMindService } = require('../src/service');
 const { createApp } = require('../src/app');
 
 const adapter = process.env.ENGINE_ADAPTER_PATH ||
-  path.resolve(__dirname, '../../../build/trademind_engine_adapter.exe');
+  path.resolve(__dirname, '../../../.trademind-build/trademind_engine_adapter.exe');
 
 function request(server, method, url, body) {
   return fetch(`http://127.0.0.1:${server.address().port}${url}`, {

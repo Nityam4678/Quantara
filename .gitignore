@@ -1,6 +1,7 @@
 # Build output
 build/
 cmake-build-*/
+.trademind-build/
 *.exe
 *.o
 *.obj
@@ -15,4 +16,6 @@ services/api-gateway/node_modules/
 frontend/node_modules/
 frontend/dist/
 services/ai-service/.venv/
+*.env
+.trademind/
 services/ai-service/**/__pycache__/

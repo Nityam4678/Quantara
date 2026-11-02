@@ -10,7 +10,12 @@ class AiClient {
     try {
       response = await fetch(`${this.baseUrl}${path}`, {
         ...options,
-        headers: { 'Content-Type': 'application/json', ...(options.headers || {}) }
+        headers: {
+          'Content-Type': 'application/json',
+          ...(process.env.INTERNAL_SERVICE_TOKEN
+            ? { 'X-Internal-Token': process.env.INTERNAL_SERVICE_TOKEN } : {}),
+          ...(options.headers || {})
+        }
       });
     } catch (error) {
       throw new AppError(503, 'AI_UNAVAILABLE', error.message);

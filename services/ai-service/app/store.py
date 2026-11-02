@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import math
+import os
 import re
 from dataclasses import dataclass
 from typing import Any
+from contextlib import contextmanager
 
 from .models import Chunk
 from .models import BenchmarkRecord
@@ -13,6 +15,17 @@ from .models import BenchmarkRecord
 class StoredChunk:
     chunk: Chunk
     embedding: list[float]
+
+
+class _PoolConnection:
+    def __init__(self, pool):
+        self.pool = pool
+
+    @contextmanager
+    def cursor(self):
+        with self.pool.connection() as connection:
+            with connection.cursor() as cursor:
+                yield cursor
 
 
 class MemoryStore:
@@ -93,8 +106,19 @@ class PostgresStore(MemoryStore):
             import psycopg
         except ImportError as error:
             raise RuntimeError("psycopg is required for PostgreSQL storage") from error
+        try:
+            from psycopg_pool import ConnectionPool
+        except ImportError as error:
+            raise RuntimeError("psycopg pool support is required for PostgreSQL storage") from error
         self.psycopg = psycopg
-        self.connection = psycopg.connect(database_url, autocommit=True)
+        self.pool = ConnectionPool(
+            database_url,
+            min_size=int(os.getenv("DB_POOL_MIN_SIZE", "1")),
+            max_size=int(os.getenv("DB_POOL_MAX_SIZE", "5")),
+            kwargs={"autocommit": True},
+            open=True,
+        )
+        self.connection = _PoolConnection(self.pool)
 
     def initialize(self) -> None:
         with self.connection.cursor() as cursor:

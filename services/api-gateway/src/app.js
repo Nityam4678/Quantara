@@ -2,13 +2,37 @@ const express = require('express');
 const crypto = require('node:crypto');
 const { AppError, errorHandler } = require('./errors');
 const { orderInput, idParameter, boundedQuery } = require('./validation');
+const { authentication, issueToken, createRateLimiter, cors } = require('./security');
+const { createMetrics } = require('./metrics');
+const { trace } = require('@opentelemetry/api');
 
 function createApp(service, aiClient = null) {
   const app = express();
+  const metrics = createMetrics();
+  const tracer = trace.getTracer('trademind-api-gateway');
   app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '64kb' }));
+  app.use(cors());
+  app.use(createRateLimiter({
+    windowMs: Number(process.env.RATE_LIMIT_WINDOW_MS || 60_000),
+    max: Number(process.env.RATE_LIMIT_MAX || 240)
+  }));
+  app.post('/api/auth/token', issueToken);
+  app.use(authentication());
   app.use((request, response, next) => {
     request.id = request.header('x-request-id') || crypto.randomUUID();
     response.setHeader('x-request-id', request.id);
+    next();
+  });
+  app.use((request, response, next) => {
+    const started = performance.now();
+    const span = tracer.startSpan(`HTTP ${request.method}`);
+    span.setAttribute('http.route', request.path);
+    response.on('finish', () => {
+      const duration = performance.now() - started;
+      metrics.observe(request.route?.path || request.path, duration);
+      span.setAttribute('http.status_code', response.statusCode);
+      span.end();
+    });
     next();
   });
 
@@ -59,24 +83,23 @@ function createApp(service, aiClient = null) {
         'X-Accel-Buffering': 'no'
       });
 
-      app.post('/api/ai/benchmarks/run', async (request, response, next) => {
-        if (!aiClient) return next(new AppError(503, 'AI_UNAVAILABLE', 'AI service is not configured'));
-        try { response.status(201).json(await aiClient.runBenchmark(request.body)); } catch (error) { next(error); }
-      });
-
-      app.get('/api/ai/benchmarks', async (request, response, next) => {
-        if (!aiClient) return next(new AppError(503, 'AI_UNAVAILABLE', 'AI service is not configured'));
-        try { response.json(await aiClient.benchmarks(request.query.limit || 100)); } catch (error) { next(error); }
-      });
-
-      app.post('/api/ai/benchmarks/analyze', async (request, response, next) => {
-        if (!aiClient) return next(new AppError(503, 'AI_UNAVAILABLE', 'AI service is not configured'));
-        try { response.json(await aiClient.benchmarkAnalysis(request.body)); } catch (error) { next(error); }
-      });
       response.flushHeaders();
       for await (const chunk of upstream.body) response.write(chunk);
       response.end();
     } catch (error) { next(error); }
+  });
+
+  app.post('/api/ai/benchmarks/run', async (request, response, next) => {
+    if (!aiClient) return next(new AppError(503, 'AI_UNAVAILABLE', 'AI service is not configured'));
+    try { response.status(201).json(await aiClient.runBenchmark(request.body)); } catch (error) { next(error); }
+  });
+  app.get('/api/ai/benchmarks', async (request, response, next) => {
+    if (!aiClient) return next(new AppError(503, 'AI_UNAVAILABLE', 'AI service is not configured'));
+    try { response.json(await aiClient.benchmarks(request.query.limit || 100)); } catch (error) { next(error); }
+  });
+  app.post('/api/ai/benchmarks/analyze', async (request, response, next) => {
+    if (!aiClient) return next(new AppError(503, 'AI_UNAVAILABLE', 'AI service is not configured'));
+    try { response.json(await aiClient.benchmarkAnalysis(request.body)); } catch (error) { next(error); }
   });
 
   app.post('/api/ai/chat/stream', async (request, response, next) => {
@@ -96,7 +119,16 @@ function createApp(service, aiClient = null) {
   });
 
   app.get('/api/metrics', (request, response) => {
-    response.json({ ok: true, metrics: service.metricsSnapshot() });
+    response.json({ ok: true, metrics: service.metricsSnapshot(), http: metrics.snapshot() });
+  });
+  app.get('/metrics', (request, response) => {
+    const metricLabel = value => String(value).replace(/\\/g, '\\\\')
+      .replace(/"/g, '\\"').replace(/\r?\n/g, '');
+    const lines = metrics.snapshot().flatMap(item => [
+      `trademind_http_requests_total{route="${metricLabel(item.route)}"} ${item.requests}`,
+      `trademind_http_request_latency_average_ms{route="${metricLabel(item.route)}"} ${item.averageMs}`
+    ]);
+    response.type('text/plain').send(`${lines.join('\n')}\n`);
   });
 
   app.get('/api/stream', async (request, response, next) => {

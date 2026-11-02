@@ -3,9 +3,16 @@ import os
 from pathlib import Path
 
 
+def _repository_root() -> Path:
+    configured = os.getenv("REPOSITORY_ROOT")
+    if configured:
+        return Path(configured).resolve()
+    return Path(__file__).resolve().parents[3]
+
+
 @dataclass(frozen=True)
 class Settings:
-    repository_root: Path = Path(os.getenv("REPOSITORY_ROOT", "../..")).resolve()
+    repository_root: Path = _repository_root()
     database_url: str = os.getenv("DATABASE_URL", "")
     embedding_api_url: str = os.getenv("EMBEDDING_API_URL", "")
     embedding_api_key: str = os.getenv("EMBEDDING_API_KEY", "")
@@ -34,6 +41,9 @@ class Settings:
     benchmark_timeout_seconds: float = float(os.getenv("BENCHMARK_TIMEOUT_SECONDS", "120"))
     benchmark_max_events: int = int(os.getenv("BENCHMARK_MAX_EVENTS", "10000000"))
     benchmark_max_concurrent: int = int(os.getenv("BENCHMARK_MAX_CONCURRENT", "1"))
+    internal_service_token: str = os.getenv("INTERNAL_SERVICE_TOKEN", "")
+    redis_url: str = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
+    log_level: str = os.getenv("LOG_LEVEL", "INFO")
 
 
 settings = Settings()

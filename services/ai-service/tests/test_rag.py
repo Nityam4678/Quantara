@@ -90,6 +90,11 @@ def test_incremental_ingestion_and_retrieval(tmp_path: Path):
     assert rag.retrieve("cancel order")
 
 
+def test_default_repository_root_is_independent_of_working_directory():
+    settings = Settings()
+    assert settings.repository_root.name == "LimitOrderBook"
+
+
 def test_generation_abstains_without_evidence(tmp_path: Path):
     settings = Settings(repository_root=tmp_path, embedding_dimensions=32)
     rag = CodebaseRAG(settings, MemoryStore(), EmbeddingProvider(dimensions=32))

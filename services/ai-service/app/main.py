@@ -1,11 +1,15 @@
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Request
+from fastapi.responses import PlainTextResponse
 from fastapi.responses import StreamingResponse
 import asyncio
 import json
+import logging
+import secrets
+import time
 
 from .config import settings
 from .models import (AgentRequest, AgentResponse, BenchmarkRunRequest,
-                     PerformanceAnalysisRequest, AgentResponse, ChatRequest, ChatResponse)
+                     PerformanceAnalysisRequest, ChatRequest, ChatResponse)
 from .rag import CodebaseRAG
 from .store import MemoryStore, PostgresStore
 from .evaluation import evaluate
@@ -13,6 +17,16 @@ from .agent import InvestigationAgent
 from .benchmark import BenchmarkRunner, analyze_performance
 
 app = FastAPI(title="TradeMind Codebase RAG", version="0.3.0")
+try:
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+    FastAPIInstrumentor.instrument_app(app)
+except ImportError:
+    pass
+logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO),
+                    format='{"level":"%(levelname)s","message":"%(message)s"}')
+logger = logging.getLogger("trademind.ai")
+request_count = 0
+request_latency_ms = 0.0
 store = PostgresStore(settings.database_url) if settings.database_url else MemoryStore()
 if hasattr(store, "initialize"):
     store.initialize()
@@ -21,9 +35,35 @@ agent = InvestigationAgent(settings, rag, store)
 benchmark_runner = BenchmarkRunner(settings, store)
 
 
+@app.middleware("http")
+async def hardening_middleware(request: Request, call_next):
+    global request_count, request_latency_ms
+    if settings.internal_service_token and request.url.path not in {"/health", "/metrics"}:
+        supplied = request.headers.get("x-internal-token", "")
+        if not secrets.compare_digest(supplied, settings.internal_service_token):
+            return PlainTextResponse("internal authentication required", status_code=401)
+    started = time.perf_counter()
+    response = await call_next(request)
+    elapsed = (time.perf_counter() - started) * 1000
+    request_count += 1
+    request_latency_ms += elapsed
+    logger.info("request method=%s path=%s status=%s duration_ms=%.3f",
+                request.method, request.url.path, response.status_code, elapsed)
+    response.headers["X-Request-Duration-Ms"] = f"{elapsed:.3f}"
+    return response
+
+
 @app.get("/health")
 def health() -> dict:
     return {"ok": True, "chunks": store.count(), "repository": str(settings.repository_root)}
+
+
+@app.get("/metrics", response_class=PlainTextResponse)
+def metrics():
+    average = request_latency_ms / request_count if request_count else 0
+    return (f"trademind_ai_requests_total {request_count}\n"
+            f"trademind_ai_request_latency_average_ms {average}\n"
+            f"trademind_ai_benchmark_records {len(store.list_benchmarks())}\n")
 
 
 @app.get("/retrieval")
