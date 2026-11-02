@@ -382,7 +382,7 @@ int main(int argc, char** argv) {
         }
         capacity = static_cast<std::size_t>(parsed);
     } else if (argc > 2) {
-        std::cerr << "usage: trademind_engine_adapter [capacity]\n";
+        std::cerr << "usage: quantara_engine_adapter [capacity]\n";
         return 2;
     }
 

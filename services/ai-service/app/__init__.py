@@ -1,1 +1,1 @@
-"""TradeMind codebase RAG service."""
+"""Quantara codebase RAG service."""

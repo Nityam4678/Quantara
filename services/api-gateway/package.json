@@ -1,8 +1,8 @@
 {
-  "name": "trademind-api-gateway",
+  "name": "quantara-api-gateway",
   "private": true,
   "version": "0.1.0",
-  "description": "TradeMind Phase 1 Express gateway",
+  "description": "Quantara Express API gateway",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",

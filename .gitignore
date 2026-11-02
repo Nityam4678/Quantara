@@ -1,7 +1,7 @@
 # Build output
 build/
 cmake-build-*/
-.trademind-build/
+.quantara-build/
 *.exe
 *.o
 *.obj
@@ -17,5 +17,5 @@ frontend/node_modules/
 frontend/dist/
 services/ai-service/.venv/
 *.env
-.trademind/
+.quantara/
 services/ai-service/**/__pycache__/

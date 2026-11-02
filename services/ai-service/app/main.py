@@ -16,7 +16,7 @@ from .evaluation import evaluate
 from .agent import InvestigationAgent
 from .benchmark import BenchmarkRunner, analyze_performance
 
-app = FastAPI(title="TradeMind Codebase RAG", version="0.3.0")
+app = FastAPI(title="Quantara Codebase RAG", version="0.3.0")
 try:
     from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
     FastAPIInstrumentor.instrument_app(app)
@@ -24,7 +24,7 @@ except ImportError:
     pass
 logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO),
                     format='{"level":"%(levelname)s","message":"%(message)s"}')
-logger = logging.getLogger("trademind.ai")
+logger = logging.getLogger("quantara.ai")
 request_count = 0
 request_latency_ms = 0.0
 store = PostgresStore(settings.database_url) if settings.database_url else MemoryStore()
@@ -61,9 +61,9 @@ def health() -> dict:
 @app.get("/metrics", response_class=PlainTextResponse)
 def metrics():
     average = request_latency_ms / request_count if request_count else 0
-    return (f"trademind_ai_requests_total {request_count}\n"
-            f"trademind_ai_request_latency_average_ms {average}\n"
-            f"trademind_ai_benchmark_records {len(store.list_benchmarks())}\n")
+    return (f"quantara_ai_requests_total {request_count}\n"
+            f"quantara_ai_request_latency_average_ms {average}\n"
+            f"quantara_ai_benchmark_records {len(store.list_benchmarks())}\n")
 
 
 @app.get("/retrieval")

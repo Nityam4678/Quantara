@@ -1,4 +1,4 @@
-class TradeMindService {
+class QuantaraService {
   constructor(engine) {
     this.engine = engine;
     this.events = [];
@@ -85,4 +85,4 @@ class TradeMindService {
   }
 }
 
-module.exports = { TradeMindService };
+module.exports = { QuantaraService };

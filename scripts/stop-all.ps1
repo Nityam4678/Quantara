@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Continue'
 $root = Split-Path -Parent $PSScriptRoot
-$state = Join-Path $root '.trademind'
-if (-not (Test-Path $state)) { Write-Host 'No TradeMind process state found.'; exit 0 }
+$state = Join-Path $root '.quantara'
+if (-not (Test-Path $state)) { Write-Host 'No Quantara process state found.'; exit 0 }
 
 function Import-DotEnv($path) {
     if (-not (Test-Path $path)) { return }

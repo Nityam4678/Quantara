@@ -1,4 +1,4 @@
-# TradeMind Terminal
+# Quantara: Low-Latency Trading Infrastructure with RAG-Powered Market Intelligence
 
 Phase 2 is a React/Vite/Tailwind trading terminal backed by the existing
 Express gateway and native C++ adapter. It displays actual order-book state and

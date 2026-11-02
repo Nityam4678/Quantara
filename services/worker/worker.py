@@ -9,7 +9,7 @@ import time
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"),
                     format='{"level":"%(levelname)s","message":"%(message)s"}')
-log = logging.getLogger("trademind.worker")
+log = logging.getLogger("quantara.worker")
 
 try:
     import redis

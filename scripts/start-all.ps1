@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$state = Join-Path $root '.trademind'
-$build = Join-Path $root '.trademind-build'
+$state = Join-Path $root '.quantara'
+$build = Join-Path $root '.quantara-build'
 New-Item -ItemType Directory -Force $state | Out-Null
 
 function Import-DotEnv($path) {
@@ -38,12 +38,12 @@ function Wait-ForUrl($name, $url, $timeoutSeconds = 30) {
     throw "$name did not become healthy at $url"
 }
 
-if (-not (Test-Path "$build\trademind_engine_adapter.exe")) {
+if (-not (Test-Path "$build\quantara_engine_adapter.exe")) {
     cmake -S $root -B $build -DCMAKE_BUILD_TYPE=Release
     cmake --build $build --parallel
 }
 
-$env:ENGINE_ADAPTER_PATH = "$build\trademind_engine_adapter.exe"
+$env:ENGINE_ADAPTER_PATH = "$build\quantara_engine_adapter.exe"
 $env:BENCHMARK_EXECUTABLE = "$build\lob_bench.exe"
 if (-not (Test-Path $env:ENGINE_ADAPTER_PATH)) {
     throw "C++ adapter was not built at $env:ENGINE_ADAPTER_PATH"
@@ -57,12 +57,12 @@ if ($env:REDIS_SERVER_PATH -and (Test-Path $env:REDIS_SERVER_PATH)) {
     Start-Native 'redis' $env:REDIS_SERVER_PATH $root ''
 }
 
-Start-Native 'ai-service' "$root\services\ai-service\.venv\Scripts\python.exe" "$root\services\ai-service" '-m uvicorn app.main:app --host 127.0.0.1 --port 8000'
+Start-Native 'ai-service' "$root\services\ai-service\.venv\Scripts\python.exe" "$root\services\ai-service" @('-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', '8000')
 Wait-ForUrl 'AI service' 'http://127.0.0.1:8000/health'
-Start-Native 'api-gateway' 'node.exe' "$root\services\api-gateway" 'src/server.js'
+Start-Native 'api-gateway' 'node.exe' "$root\services\api-gateway" @('src/server.js')
 Wait-ForUrl 'API gateway' 'http://127.0.0.1:3000/api/health'
-Start-Native 'worker' "$root\services\ai-service\.venv\Scripts\python.exe" "$root\services\worker" 'worker.py'
-Start-Native 'frontend' 'node.exe' "$root\frontend" 'node_modules\vite\bin\vite.js --host 127.0.0.1'
+Start-Native 'worker' "$root\services\ai-service\.venv\Scripts\python.exe" "$root\services\worker" @('worker.py')
+Start-Native 'frontend' 'node.exe' "$root\frontend" @('node_modules\vite\bin\vite.js', '--host', '127.0.0.1')
 Wait-ForUrl 'Frontend' 'http://127.0.0.1:5173/'
 
 & "$PSScriptRoot\health-check.ps1"

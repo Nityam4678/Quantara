@@ -1,6 +1,6 @@
-# TradeMind
+# Quantara: Low-Latency Trading Infrastructure with RAG-Powered Market Intelligence
 
-TradeMind is a Windows-native trading intelligence platform built around a
+Quantara is a Windows-native trading intelligence platform built around a
 low-latency C++20 limit order book. The original matching engine remains the
 source of truth for order processing; the surrounding services provide an API,
 trading terminal, codebase RAG, controlled investigation tools, and benchmark
@@ -63,7 +63,7 @@ Set-Location C:\Users\ADMIN\Desktop\Projects\LimitOrderBook
 ```
 
 The setup script installs JavaScript dependencies, creates the Python
-environment, and builds the native targets in `.trademind-build`.
+environment, and builds the native targets in `.quantara-build`.
 
 Copy and review the environment templates if needed:
 
@@ -91,13 +91,13 @@ Open the terminal at:
 http://127.0.0.1:5173
 ```
 
-Stop only processes started by TradeMind:
+Stop only processes started by Quantara:
 
 ```powershell
 .\scripts\stop-all.ps1
 ```
 
-Logs and PID files are stored in `.trademind\`.
+Logs and PID files are stored in `.quantara\`.
 
 The services use these local endpoints:
 
@@ -112,21 +112,21 @@ The services use these local endpoints:
 Build the native engine:
 
 ```powershell
-cmake -S . -B .trademind-build -DCMAKE_BUILD_TYPE=Release
-cmake --build .trademind-build --parallel
+cmake -S . -B .quantara-build -DCMAKE_BUILD_TYPE=Release
+cmake --build .quantara-build --parallel
 ```
 
 Run the C++ tests:
 
 ```powershell
-ctest --test-dir .trademind-build --output-on-failure
+ctest --test-dir .quantara-build --output-on-failure
 ```
 
 Run gateway tests:
 
 ```powershell
 Set-Location services\api-gateway
-$env:ENGINE_ADAPTER_PATH = (Resolve-Path ..\..\.trademind-build\trademind_engine_adapter.exe).Path
+$env:ENGINE_ADAPTER_PATH = (Resolve-Path ..\..\.quantara-build\quantara_engine_adapter.exe).Path
 npm test
 ```
 
@@ -254,13 +254,57 @@ Invoke-RestMethod -Method Post `
 The original `lob_bench` methodology is preserved. Run it directly:
 
 ```powershell
-.\.trademind-build\lob_bench.exe
-.\.trademind-build\lob_bench.exe --events=5000000 --seed=42 --sigma=25
+.\.quantara-build\lob_bench.exe
+.\.quantara-build\lob_bench.exe --events=5000000 --seed=42 --sigma=25
 ```
 
 Supported options are `--events`, `--seed`, and `--sigma`. The AI service can
 run the executable through a controlled process, parse its human-readable
 output, enforce timeouts, limit concurrency, and store measured results.
+
+### Verified performance result
+
+The following result was measured locally on Windows 11 with GCC 15.2,
+`-O2 -DNDEBUG`, 200,000 events, seed `42`, sigma `12`, and no core pinning or
+frequency lock:
+
+| Workload | Throughput | Average latency | p50 all | p99 all | p99.9 all | Working set |
+|---|---:|---:|---:|---:|---:|---:|
+| Crossing flow | 20,995,832 events/sec | 47.6 ns/event | 70 ns | 160 ns | 240 ns | 0.0 MB |
+| Deep book | 10,166,993 events/sec | 98.4 ns/event | 80 ns | 802 ns | 1,423 ns | 5.0 MB |
+
+The run processed all 200,000 events for each workload, reported a consistent
+book, zero rejected adds, and a 100% cancel hit rate. The deep-book workload
+was approximately 2.06x slower than crossing flow in this run. This is a
+measured comparison, not a proof of a bottleneck; percentile tails include
+operating-system scheduling noise and the benchmark's 20 ns RDTSC timer
+overhead.
+
+The benchmark intelligence service stores workload, event count, seed, sigma,
+throughput, average and percentile latency, working-set memory, compiler/build
+configuration, machine metadata, and raw process output. Its performance
+analyst combines stored measurements with retrieved implementation evidence.
+Numerical claims come from stored benchmark records; suspected bottlenecks are
+labelled hypotheses and require profiling to confirm.
+
+Run the benchmark parser and runner tests:
+
+```powershell
+Set-Location .\services\ai-service
+python -m pytest -q tests\test_benchmark.py
+```
+
+Ask the performance analyst through the gateway after recording a benchmark:
+
+```powershell
+$request = @{ question = "Why is deep-book throughput lower than crossing-flow throughput?" } |
+  ConvertTo-Json
+
+Invoke-RestMethod -Method Post `
+  -Uri http://127.0.0.1:3000/api/ai/benchmarks/analyze `
+  -ContentType application/json `
+  -Body $request | ConvertTo-Json -Depth 10
+```
 
 ## Configuration and security
 
@@ -308,8 +352,8 @@ Check service health:
 If the native adapter is missing, rebuild:
 
 ```powershell
-cmake -S . -B .trademind-build -DCMAKE_BUILD_TYPE=Release
-cmake --build .trademind-build --parallel
+cmake -S . -B .quantara-build -DCMAKE_BUILD_TYPE=Release
+cmake --build .quantara-build --parallel
 ```
 
 If a previous run is stuck:
@@ -322,8 +366,8 @@ If a previous run is stuck:
 Inspect logs:
 
 ```powershell
-Get-Content .\.trademind\api-gateway.log -Tail 100
-Get-Content .\.trademind\api-gateway.log.err -Tail 100
-Get-Content .\.trademind\ai-service.log -Tail 100
-Get-Content .\.trademind\frontend.log -Tail 100
+Get-Content .\.quantara\api-gateway.log -Tail 100
+Get-Content .\.quantara\api-gateway.log.err -Tail 100
+Get-Content .\.quantara\ai-service.log -Tail 100
+Get-Content .\.quantara\frontend.log -Tail 100
 ```

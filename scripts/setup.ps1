@@ -29,10 +29,10 @@ if (-not (Test-Path "$root\.env")) {
 @'
 POSTGRES_HOST=127.0.0.1
 POSTGRES_PORT=5432
-POSTGRES_DB=trademind
-POSTGRES_USER=trademind
+POSTGRES_DB=quantara
+POSTGRES_USER=quantara
 POSTGRES_PASSWORD=replace-with-a-local-password
-DATABASE_URL=postgresql://trademind:replace-with-a-local-password@127.0.0.1:5432/trademind
+DATABASE_URL=
 REDIS_URL=redis://127.0.0.1:6379/0
 POSTGRES_BIN=
 PGDATA=
@@ -51,7 +51,7 @@ if (-not (Test-Path "$root\services\ai-service\.venv\Scripts\python.exe")) {
 }
 & "$root\services\ai-service\.venv\Scripts\python.exe" -m pip install -r "$root\services\ai-service\requirements.txt"
 & "$root\services\ai-service\.venv\Scripts\python.exe" -m pip install -r "$root\services\worker\requirements.txt"
-$build = Join-Path $root '.trademind-build'
+$build = Join-Path $root '.quantara-build'
 cmake -S $root -B $build -DCMAKE_BUILD_TYPE=Release
 cmake --build $build --parallel
 

@@ -16,7 +16,7 @@ function App() {
   const terminal = useTradingTerminal();
   return <div className="app-shell">
     <header className="topbar">
-      <div className="brand"><div className="brand-mark"><Sparkles size={18} /></div><div><strong>TRADEMIND</strong><span>Execution intelligence</span></div></div>
+      <div className="brand"><div className="brand-mark"><Sparkles size={18} /></div><div>      <strong>QUANTARA</strong><span>Execution intelligence</span></div></div>
       <div className="instrument"><span className="instrument-dot" /> BTC-USD <span className="muted">/</span> Spot <span className="live-dot">● {terminal.connection === 'live' ? 'LIVE' : terminal.connection.toUpperCase()}</span></div>
       <div className="top-actions"><button className="top-icon"><Bell size={17} /></button><button className="top-icon"><Settings2 size={17} /></button><div className="avatar">TM</div></div>
     </header>

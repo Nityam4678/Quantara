@@ -9,7 +9,7 @@ const { trace } = require('@opentelemetry/api');
 function createApp(service, aiClient = null) {
   const app = express();
   const metrics = createMetrics();
-  const tracer = trace.getTracer('trademind-api-gateway');
+  const tracer = trace.getTracer('quantara-api-gateway');
   app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '64kb' }));
   app.use(cors());
   app.use(createRateLimiter({
@@ -125,8 +125,8 @@ function createApp(service, aiClient = null) {
     const metricLabel = value => String(value).replace(/\\/g, '\\\\')
       .replace(/"/g, '\\"').replace(/\r?\n/g, '');
     const lines = metrics.snapshot().flatMap(item => [
-      `trademind_http_requests_total{route="${metricLabel(item.route)}"} ${item.requests}`,
-      `trademind_http_request_latency_average_ms{route="${metricLabel(item.route)}"} ${item.averageMs}`
+      `quantara_http_requests_total{route="${metricLabel(item.route)}"} ${item.requests}`,
+      `quantara_http_request_latency_average_ms{route="${metricLabel(item.route)}"} ${item.averageMs}`
     ]);
     response.type('text/plain').send(`${lines.join('\n')}\n`);
   });

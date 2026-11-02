@@ -1,4 +1,4 @@
-# TradeMind Phase 1 API Gateway
+# Quantara API Gateway
 
 Phase 1 exposes the existing C++ `lob` static library through a persistent
 native adapter process and an Express API. The matching algorithm and its hot
@@ -68,7 +68,7 @@ cmake --build $Build --parallel
 
 Set-Location services\api-gateway
 npm install
-$env:ENGINE_ADAPTER_PATH = "$PWD\..\..\build-phase1\trademind_engine_adapter.exe"
+$env:ENGINE_ADAPTER_PATH = "$PWD\..\..\build-phase1\quantara_engine_adapter.exe"
 $env:ENGINE_CAPACITY = "1000000"
 $env:PORT = "3000"
 npm start

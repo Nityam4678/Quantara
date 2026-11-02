@@ -3,11 +3,11 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { EngineClient } = require('../src/engine-client');
-const { TradeMindService } = require('../src/service');
+const { QuantaraService } = require('../src/service');
 const { createApp } = require('../src/app');
 
 const adapter = process.env.ENGINE_ADAPTER_PATH ||
-  path.resolve(__dirname, '../../../.trademind-build/trademind_engine_adapter.exe');
+  path.resolve(__dirname, '../../../.quantara-build/quantara_engine_adapter.exe');
 
 function request(server, method, url, body) {
   return fetch(`http://127.0.0.1:${server.address().port}${url}`, {
@@ -22,7 +22,7 @@ function request(server, method, url, body) {
 
 test('Phase 1 API performs actual price-time matching and cancellation', async t => {
   const engine = new EngineClient({ executable: adapter, capacity: 32, timeoutMs: 2000 });
-  const service = new TradeMindService(engine);
+  const service = new QuantaraService(engine);
   const app = createApp(service);
   const server = await new Promise(resolve => {
     const value = app.listen(0, '127.0.0.1', () => resolve(value));
@@ -63,7 +63,7 @@ test('Phase 1 API performs actual price-time matching and cancellation', async t
 
 test('Phase 1 API rejects invalid input, duplicate IDs, and pool exhaustion', async t => {
   const engine = new EngineClient({ executable: adapter, capacity: 1, timeoutMs: 2000 });
-  const service = new TradeMindService(engine);
+  const service = new QuantaraService(engine);
   const app = createApp(service);
   const server = await new Promise(resolve => {
     const value = app.listen(0, '127.0.0.1', () => resolve(value));
